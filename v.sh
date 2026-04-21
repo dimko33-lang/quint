@@ -6,11 +6,13 @@ set -e
 KEY="$1"
 [ -z "$KEY" ] && echo "Usage: curl -s URL | sudo bash -s -- \"KEY\"" && exit 1
 
-# Очистка
+# === ПОЛНАЯ ОЧИСТКА ВСЕГО СТАРОГО ===
+systemctl stop void 2>/dev/null || true
 systemctl stop quint 2>/dev/null || true
+systemctl disable void 2>/dev/null || true
 systemctl disable quint 2>/dev/null || true
-rm -f /etc/systemd/system/quint.service
-rm -rf /opt/quint
+rm -rf /opt/void /opt/quint /opt/v
+rm -f /etc/systemd/system/void.service /etc/systemd/system/quint.service
 systemctl daemon-reload
 
 # Зависимости
@@ -51,19 +53,19 @@ class QuintCore:
         self.voids_dir = self.work_dir / "voids"
         self.history_file = self.voids_dir / "history.json"
         self.css_file = self.voids_dir / "current.css"
-        
+
         self.voids_dir.mkdir(parents=True, exist_ok=True)
-        
+
         self.api_key = os.getenv("KIMI_API_KEY", "").strip()
         self.model = "kimi-k2.5"
         self.provider = "Moonshot"
         self.url = "https://api.moonshot.ai/v1/chat/completions"
         self.timeout = 120
-        
+
         self.thinking_enabled = False
         self.memory_enabled = False
         self.conversation_history = self._load_history()
-    
+
     def _load_history(self) -> List[Dict]:
         if self.history_file.exists():
             try:
@@ -71,41 +73,41 @@ class QuintCore:
             except:
                 pass
         return []
-    
+
     def _save_history(self):
         self.history_file.write_text(
             json.dumps(self.conversation_history, ensure_ascii=False, indent=2),
             encoding='utf-8'
         )
-    
+
     def get_header(self) -> str:
         thinking = "on" if self.thinking_enabled else "off"
         memory = "on" if self.memory_enabled else "off"
         time_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         return f"Quint · {self.model} ({self.provider}) · thinking: {thinking} · memory: {memory} · {time_str}"
-    
+
     def toggle_thinking(self) -> str:
         self.thinking_enabled = not self.thinking_enabled
         return "on" if self.thinking_enabled else "off"
-    
+
     def toggle_memory(self) -> str:
         self.memory_enabled = not self.memory_enabled
         if not self.memory_enabled:
             self.conversation_history = []
             self._save_history()
         return "on" if self.memory_enabled else "off"
-    
+
     def clear(self):
         self.conversation_history = []
         self._save_history()
-    
+
     def chat_stream(self, message: str) -> Generator[str, None, None]:
         self.conversation_history.append({"role": "user", "content": message})
         if self.memory_enabled:
             self._save_history()
-        
+
         messages = self.conversation_history if self.memory_enabled else [{"role": "user", "content": message}]
-        
+
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         payload = {
             "model": self.model,
@@ -113,7 +115,7 @@ class QuintCore:
             "stream": True,
             "thinking": {"type": "enabled"} if self.thinking_enabled else {"type": "disabled"}
         }
-        
+
         full_response = ""
         try:
             with requests.post(self.url, headers=headers, json=payload, timeout=self.timeout, stream=True) as resp:
@@ -136,7 +138,7 @@ class QuintCore:
                                 yield content
                         except:
                             continue
-            
+
             if full_response:
                 self.conversation_history.append({"role": "assistant", "content": full_response})
                 if self.memory_enabled:
@@ -147,15 +149,15 @@ class QuintCore:
             if self.memory_enabled:
                 self._save_history()
             yield error_msg
-    
+
     def get_css(self) -> str:
         if self.css_file.exists():
             return self.css_file.read_text(encoding='utf-8')
         return ""
-    
+
     def apply_css(self, css: str):
         self.css_file.write_text(css, encoding='utf-8')
-    
+
     def reset_css(self):
         if self.css_file.exists():
             self.css_file.unlink()
@@ -253,7 +255,7 @@ async function sendMessage() {
     if (!text || isSending) return;
     isSending = true;
     editableInput.innerText = '';
-    
+
     if (text.startsWith('/')) {
         const res = await fetch('/command', { 
             method: 'POST', 
@@ -272,10 +274,10 @@ async function sendMessage() {
         editableInput.focus();
         return;
     }
-    
+
     addMessageToUI('user', text);
     lastHistoryLength++;
-    
+
     const assistantDiv = document.createElement('div');
     assistantDiv.className = 'msg assistant';
     const prefixSpan = document.createElement('span');
@@ -283,7 +285,7 @@ async function sendMessage() {
     prefixSpan.textContent = '~ ';
     assistantDiv.appendChild(prefixSpan);
     manuscript.appendChild(assistantDiv);
-    
+
     try {
         const res = await fetch('/chat', { 
             method: 'POST', 
@@ -373,7 +375,7 @@ def get_history():
 def handle_command():
     data = request.get_json()
     cmd = data.get('command', '').lower().strip()
-    
+
     if cmd == '/t':
         status = core.toggle_thinking()
         return jsonify({'header': core.get_header(), 'message': f'thinking {status}'})
@@ -468,6 +470,11 @@ systemctl daemon-reload
 systemctl enable quint.service
 systemctl start quint.service
 
+# === АЛИАС V ===
+sed -i '/alias v=/d' ~/.bashrc 2>/dev/null || true
+echo "alias v='cd /opt/quint && source venv/bin/activate && python term/v.py'" >> ~/.bashrc
+source ~/.bashrc 2>/dev/null || true
+
 sleep 2
 
 if systemctl is-active --quiet quint.service; then
@@ -475,7 +482,7 @@ if systemctl is-active --quiet quint.service; then
     echo ""
     echo "=== Quint ==="
     echo "Web:  http://$IP:42424"
-    echo "Term: cd /opt/quint && source venv/bin/activate && python term/v.py"
+    echo "Term: v"
     echo ""
 else
     journalctl -u quint.service -n 10 --no-pager
