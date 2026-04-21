@@ -6,7 +6,7 @@ set -e
 KEY="$1"
 [ -z "$KEY" ] && echo "Usage: curl -s URL | sudo bash -s -- \"KEY\"" && exit 1
 
-# Очистка старого
+# Очистка
 systemctl stop quint 2>/dev/null || true
 systemctl disable quint 2>/dev/null || true
 rm -f /etc/systemd/system/quint.service
@@ -25,7 +25,7 @@ cd /opt/quint
 echo "KIMI_API_KEY=$KEY" > .env
 chmod 600 .env
 
-# Виртуальное окружение
+# Python env
 python3 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
@@ -120,6 +120,10 @@ class QuintCore:
                             delta = chunk.get("choices", [{}])[0].get("delta", {})
                             content = delta.get("content", "")
                             if content:
+                                try:
+                                    content = content.encode('latin-1').decode('utf-8')
+                                except:
+                                    pass
                                 full_response += content
                                 yield content
                         except:
@@ -149,7 +153,7 @@ class QuintCore:
             self.css_file.unlink()
 EOF
 
-# === ВЕБ-ИНТЕРФЕЙС (ГРИМУАР) ===
+# === ВЕБ-ИНТЕРФЕЙС ===
 cat > web/app.py << 'EOF'
 #!/usr/bin/env python3
 import sys
@@ -161,9 +165,12 @@ from datetime import datetime
 core = QuintCore()
 app = Flask(__name__)
 
+MODEL_NAME = "kimi-k2.5"
+PROVIDER = "Moonshot"
+
 HTML = """
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -173,14 +180,14 @@ HTML = """
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { background: #0c0c0c; color: #d4d4d4; font-family: 'JetBrains Mono', monospace; font-size: 14px; line-height: 1.5; padding: 6px 12px; min-height: 100vh; }
 #header { color: #4a4a4a; font-size: 10px; margin: 0; padding: 0; line-height: 1.3; user-select: text; }
-#manuscript { margin: 0; padding: 0; user-select: text; overflow-y: auto; max-height: calc(100vh - 100px); }
+#manuscript { margin: 0; padding: 0; user-select: text; }
 .msg { margin: 0; padding: 0; line-height: 1.6; white-space: pre-wrap; word-break: break-word; user-select: text; }
 .msg.user { color: #9a9a9a; }
 .msg.assistant { color: #d4d4d4; }
 .msg.system { color: #6a6a6a; font-style: italic; }
 .msg .prefix { color: #5a5a5a; user-select: text; }
 .separator { margin: 0; padding: 0; line-height: 1.5; color: transparent; user-select: text; font-size: 12px; }
-#input-line { display: flex; align-items: center; position: fixed; bottom: 0; left: 0; right: 0; height: 60px; padding: 10px 20px; background: #0c0c0c; border-top: 1px solid #2a2a2a; }
+#input-line { display: flex; align-items: center; margin: 0; padding: 0; color: #6a6a6a; }
 .prompt { margin-right: 8px; user-select: none; color: #5a5a5a; }
 #editable-input { background: transparent; border: none; color: #d4d4d4; font-family: inherit; font-size: 14px; flex-grow: 1; outline: none; caret-color: #a0a0a0; padding: 0; min-height: 1.5em; user-select: text; }
 #editable-input:empty::before { content: attr(data-placeholder); color: #4a4a4a; }
@@ -188,7 +195,7 @@ html, body { background: #0c0c0c; color: #d4d4d4; font-family: 'JetBrains Mono',
 <link rel="stylesheet" href="/css" id="dynamic-css">
 </head>
 <body>
-<div id="header">Quint · kimi-k2.5 (Moonshot) · <span id="thinking-status">thinking: off</span> · <span id="memory-status">memory: off</span> · """ + datetime.now().strftime('%Y-%m-%d %H:%M:%S') + """</div>
+<div id="header">Quint · """ + MODEL_NAME + """ (""" + PROVIDER + """) · <span id="thinking-status">thinking: off</span> · <span id="memory-status">memory: off</span> · """ + datetime.now().strftime('%Y-%m-%d %H:%M:%S') + """</div>
 <div id="manuscript"><div class="separator">***</div></div>
 <div id="input-line"><span class="prompt">></span><div id="editable-input" contenteditable="true" data-placeholder=" "></div></div>
 <script>
@@ -218,7 +225,7 @@ function addMessageToUI(role, content, scroll = true) {
     sep.className = 'separator';
     sep.textContent = '***';
     manuscript.appendChild(sep);
-    if (scroll) manuscript.scrollTop = manuscript.scrollHeight;
+    if (scroll) window.scrollTo(0, document.body.scrollHeight);
 }
 
 function refreshCSS() { document.getElementById('dynamic-css').href = '/css?' + Date.now(); }
@@ -230,7 +237,11 @@ async function sendMessage() {
     editableInput.innerText = '';
     
     if (text.startsWith('/')) {
-        const res = await fetch('/command', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({command: text}) });
+        const res = await fetch('/command', { 
+            method: 'POST', 
+            headers: {'Content-Type': 'application/json'}, 
+            body: JSON.stringify({command: text}) 
+        });
         const data = await res.json();
         if (data.clear) manuscript.innerHTML = '<div class="separator">***</div>';
         else addMessageToUI('system', data.message);
@@ -251,16 +262,22 @@ async function sendMessage() {
     manuscript.appendChild(assistantDiv);
     
     try {
-        const res = await fetch('/chat', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({message: text}) });
+        const res = await fetch('/chat', { 
+            method: 'POST', 
+            headers: {'Content-Type': 'application/json'}, 
+            body: JSON.stringify({message: text}) 
+        });
+        if (!res.ok) throw new Error('Chat failed');
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let fullResponse = '';
         while (true) {
             const {done, value} = await reader.read();
             if (done) break;
-            fullResponse += decoder.decode(value, {stream: true});
+            const chunk = decoder.decode(value, {stream: true});
+            fullResponse += chunk;
             assistantDiv.innerHTML = '<span class="prefix">~ </span>' + fullResponse;
-            manuscript.scrollTop = manuscript.scrollHeight;
+            window.scrollTo(0, document.body.scrollHeight);
         }
         const sep = document.createElement('div');
         sep.className = 'separator';
@@ -275,8 +292,36 @@ async function sendMessage() {
     }
 }
 
-editableInput.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
-document.addEventListener('click', e => { if (!e.target.closest('.msg') && !e.target.closest('#editable-input')) editableInput.focus(); });
+editableInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+});
+
+document.addEventListener('click', e => {
+    const isTextSelection = window.getSelection().toString().length > 0;
+    if (!isTextSelection && !e.target.closest('.msg') && !e.target.closest('#editable-input') && !e.target.closest('#header')) {
+        editableInput.focus();
+    }
+});
+
+document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+        e.preventDefault();
+        const selection = window.getSelection();
+        const range = document.createRange();
+        const header = document.getElementById('header');
+        range.setStartBefore(header);
+        range.setEndAfter(manuscript.lastChild || manuscript);
+        selection.removeAllRanges();
+        selection.addRange(range);
+    }
+});
+
+document.addEventListener('copy', e => {
+    const selection = window.getSelection();
+    e.clipboardData.setData('text/plain', selection.toString());
+    e.preventDefault();
+});
+
 loadHistory();
 editableInput.focus();
 </script>
@@ -327,7 +372,7 @@ if __name__ == '__main__':
     app.run(host='0.0.0.0', port=42424, debug=False, threaded=True)
 EOF
 
-# === ТЕРМИНАЛ (V) ===
+# === ТЕРМИНАЛ ===
 cat > term/v.py << 'EOF'
 #!/usr/bin/env python3
 import sys
@@ -341,7 +386,7 @@ session = PromptSession()
 def header():
     thinking = "on" if core.thinking_enabled else "off"
     memory = "on" if core.memory_enabled else "off"
-    print("\033cV ⁰³ | kimi-k2.5 (Moonshot) | thinking: " + thinking + " | memory: " + memory + "\n")
+    print("\033cQuint ⁰³ | kimi-k2.5 (Moonshot) | thinking: " + thinking + " | memory: " + memory + "\n")
 
 def chat(p):
     print("\n~ ", end="", flush=True)
@@ -404,7 +449,7 @@ sleep 2
 if systemctl is-active --quiet quint.service; then
     IP=$(hostname -I | awk '{print $1}')
     echo ""
-    echo "=== Quint Full ==="
+    echo "=== Quint ==="
     echo "Web:  http://$IP:42424"
     echo "Term: cd /opt/quint && source venv/bin/activate && python term/v.py"
     echo ""
