@@ -43,6 +43,7 @@ import os
 import requests
 from pathlib import Path
 from typing import List, Dict, Generator
+from datetime import datetime
 
 class QuintCore:
     def __init__(self, work_dir: str = "/opt/quint"):
@@ -55,6 +56,7 @@ class QuintCore:
         
         self.api_key = os.getenv("KIMI_API_KEY", "").strip()
         self.model = "kimi-k2.5"
+        self.provider = "Moonshot"
         self.url = "https://api.moonshot.ai/v1/chat/completions"
         self.timeout = 120
         
@@ -75,6 +77,12 @@ class QuintCore:
             json.dumps(self.conversation_history, ensure_ascii=False, indent=2),
             encoding='utf-8'
         )
+    
+    def get_header(self) -> str:
+        thinking = "on" if self.thinking_enabled else "off"
+        memory = "on" if self.memory_enabled else "off"
+        time_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        return f"Quint · {self.model} ({self.provider}) · thinking: {thinking} · memory: {memory} · {time_str}"
     
     def toggle_thinking(self) -> str:
         self.thinking_enabled = not self.thinking_enabled
@@ -160,13 +168,9 @@ import sys
 sys.path.insert(0, '/opt/quint')
 from core import QuintCore
 from flask import Flask, Response, jsonify, request, stream_with_context
-from datetime import datetime
 
 core = QuintCore()
 app = Flask(__name__)
-
-MODEL_NAME = "kimi-k2.5"
-PROVIDER = "Moonshot"
 
 HTML = """
 <!DOCTYPE html>
@@ -195,21 +199,23 @@ html, body { background: #0c0c0c; color: #d4d4d4; font-family: 'JetBrains Mono',
 <link rel="stylesheet" href="/css" id="dynamic-css">
 </head>
 <body>
-<div id="header">Quint · """ + MODEL_NAME + """ (""" + PROVIDER + """) · <span id="thinking-status">thinking: off</span> · <span id="memory-status">memory: off</span> · """ + datetime.now().strftime('%Y-%m-%d %H:%M:%S') + """</div>
+<div id="header"></div>
 <div id="manuscript"><div class="separator">***</div></div>
 <div id="input-line"><span class="prompt">></span><div id="editable-input" contenteditable="true" data-placeholder=" "></div></div>
 <script>
 const manuscript = document.getElementById('manuscript');
 const editableInput = document.getElementById('editable-input');
+const headerEl = document.getElementById('header');
 let isSending = false;
+let lastHistoryLength = 0;
 
 async function loadHistory() {
     const res = await fetch('/history');
     const data = await res.json();
     manuscript.innerHTML = '<div class="separator">***</div>';
     data.history.forEach(msg => addMessageToUI(msg.role, msg.content, false));
-    document.getElementById('thinking-status').textContent = `thinking: ${data.thinking ? 'on' : 'off'}`;
-    document.getElementById('memory-status').textContent = `memory: ${data.memory ? 'on' : 'off'}`;
+    lastHistoryLength = data.history.length;
+    headerEl.textContent = data.header;
 }
 
 function addMessageToUI(role, content, scroll = true) {
@@ -228,6 +234,18 @@ function addMessageToUI(role, content, scroll = true) {
     if (scroll) window.scrollTo(0, document.body.scrollHeight);
 }
 
+async function checkNewMessages() {
+    const res = await fetch('/history');
+    const data = await res.json();
+    if (data.history.length > lastHistoryLength) {
+        for (let i = lastHistoryLength; i < data.history.length; i++) {
+            addMessageToUI(data.history[i].role, data.history[i].content, true);
+        }
+        lastHistoryLength = data.history.length;
+    }
+    headerEl.textContent = data.header;
+}
+
 function refreshCSS() { document.getElementById('dynamic-css').href = '/css?' + Date.now(); }
 
 async function sendMessage() {
@@ -243,16 +261,21 @@ async function sendMessage() {
             body: JSON.stringify({command: text}) 
         });
         const data = await res.json();
-        if (data.clear) manuscript.innerHTML = '<div class="separator">***</div>';
-        else addMessageToUI('system', data.message);
-        document.getElementById('thinking-status').textContent = `thinking: ${data.thinking ? 'on' : 'off'}`;
-        document.getElementById('memory-status').textContent = `memory: ${data.memory ? 'on' : 'off'}`;
+        if (data.clear) {
+            manuscript.innerHTML = '<div class="separator">***</div>';
+            lastHistoryLength = 0;
+        } else {
+            addMessageToUI('system', data.message);
+        }
+        headerEl.textContent = data.header;
         isSending = false;
         editableInput.focus();
         return;
     }
     
     addMessageToUI('user', text);
+    lastHistoryLength++;
+    
     const assistantDiv = document.createElement('div');
     assistantDiv.className = 'msg assistant';
     const prefixSpan = document.createElement('span');
@@ -283,7 +306,9 @@ async function sendMessage() {
         sep.className = 'separator';
         sep.textContent = '***';
         manuscript.appendChild(sep);
+        lastHistoryLength++;
         refreshCSS();
+        checkNewMessages();
     } catch (e) {
         assistantDiv.innerHTML = '<span class="prefix">~ </span>[error]';
     } finally {
@@ -308,8 +333,7 @@ document.addEventListener('keydown', e => {
         e.preventDefault();
         const selection = window.getSelection();
         const range = document.createRange();
-        const header = document.getElementById('header');
-        range.setStartBefore(header);
+        range.setStartBefore(headerEl);
         range.setEndAfter(manuscript.lastChild || manuscript);
         selection.removeAllRanges();
         selection.addRange(range);
@@ -324,6 +348,7 @@ document.addEventListener('copy', e => {
 
 loadHistory();
 editableInput.focus();
+setInterval(checkNewMessages, 2000);
 </script>
 </body>
 </html>
@@ -340,7 +365,8 @@ def get_history():
     return jsonify({
         'history': core.conversation_history,
         'thinking': core.thinking_enabled,
-        'memory': core.memory_enabled
+        'memory': core.memory_enabled,
+        'header': core.get_header()
     })
 
 @app.route('/command', methods=['POST'])
@@ -350,16 +376,16 @@ def handle_command():
     
     if cmd == '/t':
         status = core.toggle_thinking()
-        return jsonify({'thinking': core.thinking_enabled, 'memory': core.memory_enabled, 'message': f'thinking {status}'})
+        return jsonify({'header': core.get_header(), 'message': f'thinking {status}'})
     elif cmd == '/m':
         status = core.toggle_memory()
         msg = f'memory {status}' + (' (cleared)' if status == 'off' else '')
-        return jsonify({'thinking': core.thinking_enabled, 'memory': core.memory_enabled, 'message': msg})
+        return jsonify({'header': core.get_header(), 'message': msg})
     elif cmd == '/c':
         core.clear()
-        return jsonify({'thinking': core.thinking_enabled, 'memory': core.memory_enabled, 'clear': True})
+        return jsonify({'header': core.get_header(), 'clear': True})
     else:
-        return jsonify({'thinking': core.thinking_enabled, 'memory': core.memory_enabled, 'message': '?'})
+        return jsonify({'header': core.get_header(), 'message': '?'})
 
 @app.route('/chat', methods=['POST'])
 def chat():
@@ -384,9 +410,7 @@ core = QuintCore()
 session = PromptSession()
 
 def header():
-    thinking = "on" if core.thinking_enabled else "off"
-    memory = "on" if core.memory_enabled else "off"
-    print("\033cQuint ⁰³ | kimi-k2.5 (Moonshot) | thinking: " + thinking + " | memory: " + memory + "\n")
+    print("\033c" + core.get_header() + "\n")
 
 def chat(p):
     print("\n~ ", end="", flush=True)
