@@ -404,7 +404,16 @@ EOF
 cat > term/v.py << 'EOF'
 #!/usr/bin/env python3
 import sys
+import os
+from pathlib import Path
 sys.path.insert(0, '/opt/quint')
+
+# Загружаем .env из корня Quint
+from dotenv import load_dotenv
+env_path = Path('/opt/quint/.env')
+if env_path.exists():
+    load_dotenv(env_path)
+
 from core import QuintCore
 from prompt_toolkit import PromptSession
 
