@@ -6,7 +6,7 @@ set -e
 KEY="$1"
 [ -z "$KEY" ] && echo "Usage: curl -s URL | sudo bash -s -- \"KEY\"" && exit 1
 
-# === ПОЛНАЯ ОЧИСТКА ВСЕГО СТАРОГО ===
+# === ПОЛНАЯ ОЧИСТКА ===
 systemctl stop void 2>/dev/null || true
 systemctl stop quint 2>/dev/null || true
 systemctl disable void 2>/dev/null || true
@@ -14,9 +14,10 @@ systemctl disable quint 2>/dev/null || true
 rm -rf /opt/void /opt/quint /opt/v
 rm -f /etc/systemd/system/void.service /etc/systemd/system/quint.service
 find /etc/systemd -name "*void*" -type f -delete 2>/dev/null || true
+userdel -r quint 2>/dev/null || true
 systemctl daemon-reload
 
-# Убиваем автообновления, если мешают
+# Убиваем автообновления
 systemctl stop unattended-upgrades 2>/dev/null || true
 systemctl disable unattended-upgrades 2>/dev/null || true
 killall apt apt-get dpkg 2>/dev/null || true
@@ -26,26 +27,31 @@ dpkg --configure -a 2>/dev/null || true
 apt update
 apt install -y python3 python3-pip python3-venv
 
+# Создаём пользователя quint
+useradd -m -s /bin/bash quint 2>/dev/null || true
+
 # Структура
 mkdir -p /opt/quint/{core,web,term,voids}
-cd /opt/quint
+chown -R quint:quint /opt/quint
+chmod 755 /opt/quint/voids
 
-# Права на voids сразу
-chmod 777 voids
+cd /opt/quint
 
 # Ключ
 echo "KIMI_API_KEY=$KEY" > .env
+chown quint:quint .env
 chmod 600 .env
 
-# Пустой history.json из коробки
+# Пустой history.json
 echo "[]" > voids/history.json
-chmod 666 voids/history.json
+chown quint:quint voids/history.json
+chmod 644 voids/history.json
 
 # Python env
 python3 -m venv venv
-source venv/bin/activate
-pip install --upgrade pip
-pip install flask requests python-dotenv prompt_toolkit
+chown -R quint:quint venv
+sudo -u quint venv/bin/pip install --upgrade pip
+sudo -u quint venv/bin/pip install flask requests python-dotenv prompt_toolkit
 
 # === ЯДРО ===
 cat > core/__init__.py << 'EOF'
@@ -69,6 +75,8 @@ class QuintCore:
         self.css_file = self.voids_dir / "current.css"
 
         self.voids_dir.mkdir(parents=True, exist_ok=True)
+        if not self.history_file.exists():
+            self.history_file.write_text("[]", encoding='utf-8')
 
         self.api_key = os.getenv("KIMI_API_KEY", "").strip()
         self.model = "kimi-k2.5"
@@ -419,7 +427,6 @@ cat > term/v.py << 'EOF'
 #!/usr/bin/env python3
 import sys
 import os
-import re
 from pathlib import Path
 sys.path.insert(0, '/opt/quint')
 
@@ -430,21 +437,14 @@ if env_path.exists():
 
 from core import QuintCore
 from prompt_toolkit import PromptSession
+from prompt_toolkit.output import create_output
 
 core = QuintCore()
 session = PromptSession()
 
-# Фильтр escape-последовательностей
-import builtins
-original_print = builtins.print
-def clean_print(*args, **kwargs):
-    text = ' '.join(str(arg) for arg in args)
-    text = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', text)
-    original_print(text, **kwargs)
-builtins.print = clean_print
-
 def header():
-    print("\033c" + core.get_header() + "\n")
+    # Убираем \033c, чтобы не было мусора
+    print("\n" + core.get_header() + "\n")
 
 def chat(p):
     print("\n~ ", end="", flush=True)
@@ -477,6 +477,7 @@ while True:
         chat(u)
 EOF
 
+chown quint:quint term/v.py
 chmod +x term/v.py
 
 # === СЕРВИС ===
@@ -487,7 +488,7 @@ After=network.target
 
 [Service]
 Type=simple
-User=root
+User=quint
 WorkingDirectory=/opt/quint
 EnvironmentFile=/opt/quint/.env
 ExecStart=/opt/quint/venv/bin/python3 /opt/quint/web/app.py
@@ -504,7 +505,7 @@ systemctl start quint.service
 
 # === АЛИАС V ===
 sed -i '/alias v=/d' ~/.bashrc 2>/dev/null || true
-echo "alias v='cd /opt/quint && source venv/bin/activate && python term/v.py'" >> ~/.bashrc
+echo "alias v='cd /opt/quint && sudo -u quint venv/bin/python term/v.py'" >> ~/.bashrc
 
 sleep 2
 
@@ -516,7 +517,7 @@ if systemctl is-active --quiet quint.service; then
     echo "Term: v"
     echo ""
     echo "Запускаю Quint..."
-    cd /opt/quint && source venv/bin/activate && python term/v.py
+    cd /opt/quint && sudo -u quint venv/bin/python term/v.py
 else
     journalctl -u quint.service -n 10 --no-pager
     exit 1
