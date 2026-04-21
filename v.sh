@@ -138,7 +138,7 @@ async function load(){let r=await fetch('/state'),d=await r.json();manuscript.in
 function add(role,content,scroll=true){let m=document.createElement('div');m.className=`msg ${role}`;let p=document.createElement('span');p.className='prefix';p.innerHTML=role==='user'?'&gt; ':'~ ';m.appendChild(p);m.appendChild(document.createTextNode(content));manuscript.appendChild(m);let s=document.createElement('div');s.className='separator';s.textContent='***';manuscript.appendChild(s);if(scroll)window.scrollTo(0,document.body.scrollHeight)}
 async function check(){let r=await fetch('/state'),d=await r.json();if(d.history.length>lastLength){for(let i=lastLength;i<d.history.length;i++)add(d.history[i].role,d.history[i].content,true);lastLength=d.history.length}headerEl.textContent=d.header}
 async function send(){let t=editableInput.innerText.trim();if(!t||isSending)return;isSending=true;editableInput.innerText='';
-if(t.startsWith('/')){let r=await fetch('/cmd',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cmd:t})}),d=await r.json();if(d.clear)manuscript.innerHTML='<div class="separator">***</div>',lastLength=0;else add('system',d.message);headerEl.textContent=d.header;isSending=false;editableInput.focus();return}
+if(t.startsWith('/')){let r=await fetch('/cmd',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cmd:t})}),d=await r.json();if(d.clear)manuscript.innerHTML='<div class="separator">***</div>',lastLength=0;else add('system',d.message||'?');headerEl.textContent=d.header;isSending=false;editableInput.focus();return}
 add('user',t);lastLength++;let a=document.createElement('div');a.className='msg assistant';a.innerHTML='<span class="prefix">~ </span>';manuscript.appendChild(a);
 try{let r=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:t})}),reader=r.body.getReader(),decoder=new TextDecoder(),full='';
 while(true){let{done,value}=await reader.read();if(done)break;full+=decoder.decode(value,{stream:true});a.innerHTML='<span class="prefix">~ </span>'+full;window.scrollTo(0,document.body.scrollHeight)}
@@ -162,9 +162,18 @@ def state(): return jsonify(core.get_state())
 @app.route('/cmd', methods=['POST'])
 def cmd():
     c = request.json.get('cmd', '').strip()
-    if c == '/t': return jsonify(core.toggle('thinking'))
-    if c == '/m': return jsonify(core.toggle('memory'))
-    if c == '/c': return jsonify(core.clear())
+    if c == '/t':
+        state = core.toggle('thinking')
+        state['message'] = f"thinking {'on' if core.thinking else 'off'}"
+        return jsonify(state)
+    if c == '/m':
+        state = core.toggle('memory')
+        state['message'] = f"memory {'on' if core.memory else 'off'}" + (' (cleared)' if not core.memory else '')
+        return jsonify(state)
+    if c == '/c':
+        state = core.clear()
+        state['clear'] = True
+        return jsonify(state)
     return jsonify(core.get_state())
 
 @app.route('/chat', methods=['POST'])
