@@ -17,17 +17,11 @@ find /etc/systemd -name "*void*" -type f -delete 2>/dev/null || true
 userdel -r quint 2>/dev/null || true
 systemctl daemon-reload
 
-# Убиваем автообновления
-systemctl stop unattended-upgrades 2>/dev/null || true
-systemctl disable unattended-upgrades 2>/dev/null || true
-killall apt apt-get dpkg 2>/dev/null || true
-dpkg --configure -a 2>/dev/null || true
-
 # Зависимости
 apt update
 apt install -y python3 python3-pip python3-venv
 
-# Создаём пользователя quint
+# Пользователь quint
 useradd -m -s /bin/bash quint 2>/dev/null || true
 
 # Структура
@@ -185,7 +179,7 @@ class QuintCore:
             self.css_file.unlink()
 EOF
 
-# === ВЕБ-ИНТЕРФЕЙС ===
+# === ВЕБ-ИНТЕРФЕЙС (ГРИМУАР) ===
 cat > web/app.py << 'EOF'
 #!/usr/bin/env python3
 import sys
@@ -422,7 +416,7 @@ if __name__ == '__main__':
     app.run(host='0.0.0.0', port=42424, debug=False, threaded=True)
 EOF
 
-# === ТЕРМИНАЛ ===
+# === ТЕРМИНАЛ (V) ===
 cat > term/v.py << 'EOF'
 #!/usr/bin/env python3
 import sys
@@ -437,13 +431,11 @@ if env_path.exists():
 
 from core import QuintCore
 from prompt_toolkit import PromptSession
-from prompt_toolkit.output import create_output
 
 core = QuintCore()
 session = PromptSession()
 
 def header():
-    # Убираем \033c, чтобы не было мусора
     print("\n" + core.get_header() + "\n")
 
 def chat(p):
@@ -505,19 +497,25 @@ systemctl start quint.service
 
 # === АЛИАС V ===
 sed -i '/alias v=/d' ~/.bashrc 2>/dev/null || true
-echo "alias v='cd /opt/quint && sudo -u quint venv/bin/python term/v.py'" >> ~/.bashrc
+echo "alias v='cd /opt/quint && sudo -u quint venv/bin/python term/v.py 2>/dev/null'" >> ~/.bashrc
 
 sleep 2
 
 if systemctl is-active --quiet quint.service; then
     IP=$(hostname -I | awk '{print $1}')
     echo ""
-    echo "=== Quint ==="
-    echo "Web:  http://$IP:42424"
-    echo "Term: v"
+    echo "=============================================="
+    echo "===            QUINT УСТАНОВЛЕН            ==="
+    echo "=============================================="
     echo ""
-    echo "Запускаю Quint..."
-    cd /opt/quint && sudo -u quint venv/bin/python term/v.py
+    echo "Веб-интерфейс:  http://$IP:42424"
+    echo ""
+    echo "Терминал (запускается командой):"
+    echo "  v"
+    echo ""
+    echo "Для выхода из терминала: /exit или Ctrl+C"
+    echo ""
+    echo "=============================================="
 else
     journalctl -u quint.service -n 10 --no-pager
     exit 1
