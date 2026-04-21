@@ -13,7 +13,14 @@ systemctl disable void 2>/dev/null || true
 systemctl disable quint 2>/dev/null || true
 rm -rf /opt/void /opt/quint /opt/v
 rm -f /etc/systemd/system/void.service /etc/systemd/system/quint.service
+find /etc/systemd -name "*void*" -type f -delete 2>/dev/null || true
 systemctl daemon-reload
+
+# Убиваем автообновления, если мешают
+systemctl stop unattended-upgrades 2>/dev/null || true
+systemctl disable unattended-upgrades 2>/dev/null || true
+killall apt apt-get dpkg 2>/dev/null || true
+dpkg --configure -a 2>/dev/null || true
 
 # Зависимости
 apt update
@@ -23,9 +30,16 @@ apt install -y python3 python3-pip python3-venv
 mkdir -p /opt/quint/{core,web,term,voids}
 cd /opt/quint
 
+# Права на voids сразу
+chmod 777 voids
+
 # Ключ
 echo "KIMI_API_KEY=$KEY" > .env
 chmod 600 .env
+
+# Пустой history.json из коробки
+echo "[]" > voids/history.json
+chmod 666 voids/history.json
 
 # Python env
 python3 -m venv venv
@@ -405,10 +419,10 @@ cat > term/v.py << 'EOF'
 #!/usr/bin/env python3
 import sys
 import os
+import re
 from pathlib import Path
 sys.path.insert(0, '/opt/quint')
 
-# Загружаем .env из корня Quint
 from dotenv import load_dotenv
 env_path = Path('/opt/quint/.env')
 if env_path.exists():
@@ -419,6 +433,15 @@ from prompt_toolkit import PromptSession
 
 core = QuintCore()
 session = PromptSession()
+
+# Фильтр escape-последовательностей
+import builtins
+original_print = builtins.print
+def clean_print(*args, **kwargs):
+    text = ' '.join(str(arg) for arg in args)
+    text = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', text)
+    original_print(text, **kwargs)
+builtins.print = clean_print
 
 def header():
     print("\033c" + core.get_header() + "\n")
