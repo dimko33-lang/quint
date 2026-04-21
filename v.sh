@@ -4,20 +4,16 @@ set -e
 KEY="$1"
 [ -z "$KEY" ] && echo "Usage: curl -s URL | sudo bash -s -- \"KEY\"" && exit 1
 
-# Очистка
 systemctl stop quint 2>/dev/null || true
 rm -rf /opt/quint /etc/systemd/system/quint.service
 userdel -r quint 2>/dev/null || true
 systemctl daemon-reload
 
-# Зависимости
 apt update
 apt install -y python3 python3-pip python3-venv
 
-# Пользователь
 useradd -m -s /bin/bash quint 2>/dev/null || true
 
-# Структура
 mkdir -p /opt/quint/{core,web,term,voids}
 chown -R quint:quint /opt/quint
 
@@ -29,7 +25,6 @@ python3 -m venv venv
 chown -R quint:quint venv
 sudo -u quint venv/bin/pip install --upgrade pip flask requests python-dotenv prompt_toolkit
 
-# === ЯДРО ===
 cat > core/agent.py << 'EOF'
 import json, os, requests
 from pathlib import Path
@@ -107,7 +102,6 @@ class QuintCore:
             yield err
 EOF
 
-# === ВЕБ ===
 cat > web/app.py << 'EOF'
 import sys
 sys.path.insert(0, '/opt/quint')
@@ -141,7 +135,7 @@ html,body{background:#0c0c0c;color:#d4d4d4;font-family:'JetBrains Mono',monospac
 const manuscript=document.getElementById('manuscript'),editableInput=document.getElementById('editable-input'),headerEl=document.getElementById('header');
 let isSending=false,lastLength=0;
 async function load(){let r=await fetch('/state'),d=await r.json();manuscript.innerHTML='<div class="separator">***</div>';d.history.forEach(m=>add(m.role,m.content,false));lastLength=d.history.length;headerEl.textContent=d.header}
-function add(role,content,scroll=true){let m=document.createElement('div');m.className=`msg ${role}`;let p=document.createElement('span');p.className='prefix';p.textContent=role==='user'?'&gt; ':'~ ';m.appendChild(p);m.appendChild(document.createTextNode(content));manuscript.appendChild(m);let s=document.createElement('div');s.className='separator';s.textContent='***';manuscript.appendChild(s);if(scroll)window.scrollTo(0,document.body.scrollHeight)}
+function add(role,content,scroll=true){let m=document.createElement('div');m.className=`msg ${role}`;let p=document.createElement('span');p.className='prefix';p.innerHTML=role==='user'?'&gt; ':'~ ';m.appendChild(p);m.appendChild(document.createTextNode(content));manuscript.appendChild(m);let s=document.createElement('div');s.className='separator';s.textContent='***';manuscript.appendChild(s);if(scroll)window.scrollTo(0,document.body.scrollHeight)}
 async function check(){let r=await fetch('/state'),d=await r.json();if(d.history.length>lastLength){for(let i=lastLength;i<d.history.length;i++)add(d.history[i].role,d.history[i].content,true);lastLength=d.history.length}headerEl.textContent=d.header}
 async function send(){let t=editableInput.innerText.trim();if(!t||isSending)return;isSending=true;editableInput.innerText='';
 if(t.startsWith('/')){let r=await fetch('/cmd',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cmd:t})}),d=await r.json();if(d.clear)manuscript.innerHTML='<div class="separator">***</div>',lastLength=0;else add('system',d.message);headerEl.textContent=d.header;isSending=false;editableInput.focus();return}
@@ -154,7 +148,7 @@ document.addEventListener('click',e=>{if(!window.getSelection().toString()&&!e.t
 load();editableInput.focus();setInterval(check,2000);
 </script></body></html>"""
 
-@app.route('/')          # ВОТ ЗДЕСЬ БЫЛА ОШИБКА - НЕ ХВАТАЛО def!
+@app.route('/')
 def index(): return HTML
 
 @app.route('/css')
@@ -183,7 +177,6 @@ if __name__ == '__main__':
     app.run(host='0.0.0.0', port=42424, debug=False, threaded=True)
 EOF
 
-# === ТЕРМИНАЛ (тонкий клиент) ===
 cat > term/v.py << 'EOF'
 #!/usr/bin/env python3
 import requests, json, sys
@@ -223,7 +216,6 @@ EOF
 
 chown quint:quint term/v.py && chmod +x term/v.py
 
-# === СЕРВИС ===
 cat > /etc/systemd/system/quint.service << 'EOF'
 [Unit]
 Description=Quint
@@ -244,7 +236,6 @@ EOF
 systemctl daemon-reload
 systemctl enable quint && systemctl start quint
 
-# === АЛИАС ===
 sed -i '/alias v=/d' ~/.bashrc 2>/dev/null || true
 echo "alias v='cd /opt/quint && sudo -u quint venv/bin/python term/v.py 2>/dev/null'" >> ~/.bashrc
 
@@ -253,4 +244,3 @@ IP=$(hostname -I | awk '{print $1}')
 echo ""
 echo "http://$IP:42424"
 echo "v"
-EOF
