@@ -473,7 +473,6 @@ systemctl start quint.service
 # === АЛИАС V ===
 sed -i '/alias v=/d' ~/.bashrc 2>/dev/null || true
 echo "alias v='cd /opt/quint && source venv/bin/activate && python term/v.py'" >> ~/.bashrc
-source ~/.bashrc 2>/dev/null || true
 
 sleep 2
 
@@ -484,6 +483,8 @@ if systemctl is-active --quiet quint.service; then
     echo "Web:  http://$IP:42424"
     echo "Term: v"
     echo ""
+    echo "Запускаю Quint..."
+    cd /opt/quint && source venv/bin/activate && python term/v.py
 else
     journalctl -u quint.service -n 10 --no-pager
     exit 1
